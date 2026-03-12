@@ -14,6 +14,12 @@ examples/terraform.tfstate.backup
 # IDE
 .idea/
 
+# go.work is machine-specific — points to a local clone of the OpenLineage monorepo
+# for pre-publish development of github.com/OpenLineage/openlineage/byool/terraform.
+# See go.work.example for setup instructions.
+go.work
+go.work.sum
+
 # vendor/ is intentionally committed so the repo is self-contained.
 # Do NOT add vendor/ here.
 

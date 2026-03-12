@@ -1,4 +1,4 @@
-package provider
+package dataplex
 
 import (
 	"context"
@@ -28,6 +28,8 @@ import (
 	// structpb lets us convert a Go map[string]any into a protobuf Struct,
 	// which is what ProcessOpenLineageRunEvent expects as its payload.
 	"google.golang.org/protobuf/types/known/structpb"
+
+	"github.com/OpenLineage/openlineage/byool/terraform/ol"
 )
 
 // dataplexClient wraps the GCP Lineage API client.
@@ -69,8 +71,8 @@ func newDataplexClient(ctx context.Context, projectID, location, credentialsFile
 type processInfo struct {
 	ProcessName    string // full GCP resource name, e.g. "projects/.../processes/abc"
 	DisplayName    string // human-readable name Dataplex assigns, e.g. "namespace:jobName"
-	OriginName     string // the origin name set when we emitted the OL event, e.g. "openlineage-byol-provider-0.1.0"
-	OriginVerified bool   // true if origin matches what we expect from this provider
+	OriginName     string // the origin name set when we emitted the OL event, e.g. "openlineage-byol-dataplex-0.1.0"
+	OriginVerified bool   // true if origin matches what we expect from this dataplex
 }
 
 // runInfo carries the fields we need from a Dataplex Run resource.
@@ -150,7 +152,7 @@ func (d *dataplexClient) emitAndCapture(ctx context.Context, event any) (*emitRe
 //
 // We also verify the process origin — Dataplex sets Origin.SourceType = CUSTOM
 // and Origin.Name = the value from the GcpLineage facet we sent. If that doesn't
-// match, the process exists but wasn't created by this provider (e.g. a collision
+// match, the process exists but wasn't created by this dataplex (e.g. a collision
 // with a manually created process), which we surface via OriginVerified = false.
 func (d *dataplexClient) getProcess(ctx context.Context, processName string) (*processInfo, error) {
 	process, err := d.client.GetProcess(ctx, &lineagepb.GetProcessRequest{Name: processName})
@@ -174,7 +176,7 @@ func (d *dataplexClient) getProcess(ctx context.Context, processName string) (*p
 	if origin := process.GetOrigin(); origin != nil {
 		info.OriginName = origin.GetName()
 		info.OriginVerified = origin.GetSourceType() == lineagepb.Origin_CUSTOM &&
-			origin.GetName() == providerOriginName
+			origin.GetName() == ol.ProviderOriginName
 	}
 
 	return info, nil
@@ -209,7 +211,7 @@ func (d *dataplexClient) searchProcess(ctx context.Context, namespace, jobName s
 			if origin := process.GetOrigin(); origin != nil {
 				info.OriginName = origin.GetName()
 				info.OriginVerified = origin.GetSourceType() == lineagepb.Origin_CUSTOM &&
-					origin.GetName() == providerOriginName
+					origin.GetName() == ol.ProviderOriginName
 			}
 			return info, nil
 		}
@@ -222,8 +224,8 @@ func (d *dataplexClient) searchProcess(ctx context.Context, namespace, jobName s
 // OpenLineage event with the specified namespace and job name.
 //
 // Matching priority:
-//  1. Origin check — if the process has SourceType=CUSTOM and our providerOriginName,
-//     it was definitely created by this provider; then match display_name against
+//  1. Origin check — if the process has SourceType=CUSTOM and our ol.ProviderOriginName,
+//     it was definitely created by this dataplex; then match display_name against
 //     the expected "namespace:jobName" format that Dataplex sets from the OL event.
 //  2. Attribute check — explicit OL origin attributes (may not always be present).
 //  3. display_name fallback — Dataplex sometimes sets it to just the job name.
@@ -235,7 +237,7 @@ func matchesOrigin(process *lineagepb.Process, namespace, jobName string) bool {
 	// from the GcpLineage facet we send in the OL event.
 	if origin := process.GetOrigin(); origin != nil {
 		if origin.GetSourceType() == lineagepb.Origin_CUSTOM &&
-			origin.GetName() == providerOriginName {
+			origin.GetName() == ol.ProviderOriginName {
 			// Provider origin confirmed — now match by display_name which Dataplex
 			// sets to "namespace:jobName" from the OL event job identity.
 			return displayName == expectedDisplayName || displayName == jobName
@@ -344,7 +346,7 @@ func (d *dataplexClient) deleteProcess(ctx context.Context, processName string) 
 }
 
 // close cleanly shuts down the underlying gRPC connection.
-// Should be called when the provider is done with this client.
+// Should be called when the dataplex is done with this client.
 func (d *dataplexClient) close() error {
 	if d.client != nil {
 		return d.client.Close()

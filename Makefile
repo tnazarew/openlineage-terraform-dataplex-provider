@@ -1,37 +1,21 @@
-BINARY_NAME=terraform-provider-openlineage
+BINARY_NAME=openlineage-dataplex-provider
+TF_PLUGIN_NAME=terraform-provider-openlineage-dataplex
 INSTALL_DIR=bin
 OS_ARCH=$(shell go env GOOS)_$(shell go env GOARCH)
 TF_ENV=TF_CLI_CONFIG_FILE=$(PWD)/.terraformrc
 GOPATH_BIN=$(shell go env GOPATH)/bin
 
-# Path to local OL client — only needed on dev machine
-OL_CLIENT_PATH=/Users/tomasznazarewicz/projects/OpenLineage/client/go
-
 .PHONY: build build-vendor install clean plan apply destroy test vendor env docs docs-install
-# Build the provider binary
+# Build the provider binary and create a symlink with the terraform-provider-* name
+# so that Terraform's dev_overrides lookup can find it in bin/.
 build:
 	mkdir -p $(INSTALL_DIR)
 	go build -o $(INSTALL_DIR)/$(BINARY_NAME) .
-	@echo "✅ Built: $(INSTALL_DIR)/$(BINARY_NAME)"
-
-# Build using vendored dependencies (portable, no local OL client needed)
-build-vendor:
-	mkdir -p $(INSTALL_DIR)
-	go build -mod=vendor -o $(INSTALL_DIR)/$(BINARY_NAME) .
-	@echo "✅ Built (vendor): $(INSTALL_DIR)/$(BINARY_NAME)"
-
-# Vendor all dependencies so the repo is self-contained and portable.
-# Run this after any change to the OL client, then commit vendor/.
-vendor:
-	@echo "Vendoring dependencies from local OL client at $(OL_CLIENT_PATH)..."
-	go mod tidy
-	go mod vendor
-	@echo "✅ vendor/ created — commit this directory to make the repo portable"
-	@echo ""
-	@echo "On another machine, build with: make build-vendor"
+	ln -sf $(BINARY_NAME) $(INSTALL_DIR)/$(TF_PLUGIN_NAME)
+	@echo "✅ Built: $(INSTALL_DIR)/$(BINARY_NAME) → $(INSTALL_DIR)/$(TF_PLUGIN_NAME)"
 
 # Run terraform apply using dev_overrides
-show:
+show:prov
 	cd examples && $(TF_ENV) terraform show
 
 # Run terraform plan using dev_overrides (no init needed)
@@ -55,8 +39,8 @@ clean:
 
 # Install into the local Terraform plugin cache (alternative to dev_overrides)
 install: build
-	mkdir -p ~/.terraform.d/plugins/registry.terraform.io/tomasznazarewicz/openlineage/0.1.0/$(OS_ARCH)
-	cp $(INSTALL_DIR)/$(BINARY_NAME) ~/.terraform.d/plugins/registry.terraform.io/tomasznazarewicz/openlineage/0.1.0/$(OS_ARCH)/
+	mkdir -p ~/.terraform.d/plugins/registry.terraform.io/tomasznazarewicz/openlineage-dataplex/0.1.0/$(OS_ARCH)
+	cp $(INSTALL_DIR)/$(BINARY_NAME) ~/.terraform.d/plugins/registry.terraform.io/tomasznazarewicz/openlineage-dataplex/0.1.0/$(OS_ARCH)/$(TF_PLUGIN_NAME)
 	@echo "✅ Installed to ~/.terraform.d/plugins/"
 
 # Run tests

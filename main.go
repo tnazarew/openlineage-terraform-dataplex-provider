@@ -6,7 +6,7 @@ import (
 	"log"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
-	"github.com/tomasznazarewicz/terraform-provider-openlineage/internal/provider"
+	"github.com/tnazarew/terraform-provider-openlineage-dataplex/internal/dataplex"
 )
 
 // Run "go generate" to format example terraform files and generate the docs for the registry/website
@@ -31,15 +31,17 @@ var (
 func main() {
 	var debug bool
 
-	flag.BoolVar(&debug, "debug", false, "set to true to run the provider with support for debuggers like delve")
+	flag.BoolVar(&debug, "debug", false, "set to true to run the dataplex with support for debuggers like delve")
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		Address: "registry.terraform.io/tomasznazarewicz/openlineage",
+		// Address musi odpowiadać: registry.terraform.io/<GitHub_username>/<repo_bez_prefixu_terraform-provider->
+		// GitHub username: tnazarew, repo: terraform-provider-openlineage-dataplex → nazwa: openlineage-dataplex
+		Address: "registry.terraform.io/tnazarew/openlineage-dataplex",
 		Debug:   debug,
 	}
 
-	err := providerserver.Serve(context.Background(), provider.New(version), opts)
+	err := providerserver.Serve(context.Background(), dataplex.New(version), opts)
 
 	if err != nil {
 		log.Fatal(err.Error())

@@ -1,0 +1,21 @@
+// go.work.example — szablon lokalnego go.work dla deweloperów
+//
+// Skopiuj ten plik jako go.work i dostosuj ścieżkę do lokalnego klonu OpenLineage:
+//
+//   cp go.work.example go.work
+//
+// go.work jest ignorowany przez git (.gitignore) — to plik lokalny.
+// Potrzebny dopóki github.com/OpenLineage/openlineage/byool/terraform
+// nie zostanie opublikowany z tagiem byool/terraform/v1.46.0-prerelease.
+//
+// Po publikacji modułu go.work nie będzie potrzebny — go.mod providera
+// odwoła się bezpośrednio do opublikowanej wersji.
+
+go 1.26.0
+
+use .
+
+// Zastąp poniższą ścieżkę lokalną ścieżką do katalogu byool/terraform
+// w Twoim klonie repo OpenLineage:
+replace github.com/OpenLineage/openlineage/byool/terraform => /path/to/openlineage/byool/terraform
+

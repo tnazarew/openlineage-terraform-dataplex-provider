@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# GITHUB_TOKEN potrzebuje prawa do tworzenia Release i uploadu assetów
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 pozwala GoReleaser odczytać pełną historię git
+          # (potrzebne do generowania changelogu i wykrywania poprzednich tagów)
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      # GPG key importowany ze secretu GitHub do podpisywania artefaktów.
+      # Terraform Registry wymaga podpisanego pliku SHA256SUMS.
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        id: import_gpg
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fingerprint GPG dostarczony przez krok import_gpg
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+

@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     openlineage = {
-      source = "registry.terraform.io/tomasznazarewicz/openlineage"
+      source = "tnazarew/openlineage-dataplex"
     }
   }
 }
@@ -35,6 +35,7 @@ resource "openlineage_job" "example" {
     }
 
     catalog {
+      name         = "example_catalog_name_1"
       framework    = "example_framework"
       type         = "example_catalog_type"
       metadata_uri  = "example://localhost:9083"
@@ -54,6 +55,7 @@ resource "openlineage_job" "example" {
     }
 
     catalog {
+      name         = "example_input_name_2"
       framework    = "custom"
       type         = "example_catalog_type"
       metadata_uri  = "example://localhost:9083"
@@ -73,6 +75,7 @@ resource "openlineage_job" "example" {
     }
 
     catalog {
+      name        = "example_output_name"
       framework    = "example_framework"
       type         = "example_catalog_type"
       metadata_uri  = "example://localhost:9083"

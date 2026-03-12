@@ -1,192 +1,390 @@
-# Terraform Provider for OpenLineage (Simplified Architecture)
+# OpenLineage Terraform Provider — Dataplex
 
-A Terraform provider for emitting OpenLineage events to GCP Dataplex Lineage API.
+A Terraform provider that emits [OpenLineage](https://openlineage.io) events to the
+[GCP Dataplex Lineage API](https://cloud.google.com/dataplex/docs/lineage-overview),
+creating and managing lineage entities (Process, Run, LineageEvent) as Terraform resources.
 
-## Architecture
+This is an implementation of the **Bring Your Own OpenLineage (BYOOL)** concept — declaring
+static lineage for pipelines that don't have runtime OpenLineage instrumentation.
 
-This provider uses a **simplified single-resource architecture** with a **dual-state model**:
+---
 
-- **User Configuration**: Define jobs using OpenLineage specification (namespace, name, inputs, outputs, metadata)
-- **Computed State**: Track Dataplex Process state (process_name, run_id, run_state, timestamps)
+## How It Works
 
-### Design Principles
+```
+  .tf config                Provider                    GCP Dataplex
+ ──────────────     ───────────────────────────     ──────────────────────
+                            │
+  openlineage_job  ──────►  │  1. Build OL RunEvent
+    namespace                │     (job + inputs +
+    name                     │      outputs + facets)
+    inputs  ──────────────►  │
+    outputs ──────────────►  │  2. ProcessOpenLineageRunEvent (gRPC)
+                            │ ─────────────────────────────────────────►
+                            │                                    creates / updates:
+                            │ ◄─────────────────────────────────────────
+                            │     process_name                  • Process
+                            │     run_name                      • Run
+                            │     lineage_event_name            • LineageEvent
+                            │
+                            │  3. ListRuns → get run_state
+                            │ ─────────────────────────────────────────►
+                            │ ◄───────────────────── "COMPLETED" ───────
+                            │
+  terraform.tfstate ◄──────  │  4. Save state
+    process_name             │
+    run_name                 │
+    lineage_event_name       │
+    run_state                │
+    run_id                   │
+```
 
-1. **Simplicity**: Single `openlineage_job` resource instead of separate dataset/job resources
-2. **Declarative**: Jobs are defined with simple dataset references (no complex nesting)
-3. **Integration**: Direct integration with GCP Dataplex Lineage API
-4. **Flexibility**: Easy to extend with additional facets as needed
+### Resource Lifecycle
+
+Each `openlineage_job` resource maps to a **Dataplex Process** entity. The Process
+is the stable long-lived entity that represents a recurring job. Each `terraform apply`
+creates a new **Run** under the same Process, recording a new lineage event.
+
+```
+terraform apply (first time)
+  └─ emit RunEvent  →  Dataplex creates Process + Run + LineageEvent
+                       store process_name, run_name, lineage_event_name in state
+
+terraform apply (config changed)
+  └─ emit new RunEvent  →  Dataplex reuses same Process, creates new Run + LineageEvent
+                           update run_id, run_name, lineage_event_name in state
+
+terraform plan (refresh)
+  └─ GET process_name   →  still exists?  →  refresh run_state
+                        →  404 (deleted outside TF)?  →  mark for re-create (drift)
+
+terraform destroy
+  └─ DeleteProcess  →  Dataplex removes Process (and all its Runs)
+```
+
+### State Structure
+
+The provider maintains two clearly separated pieces of state per resource:
+
+| Section | Written by | Contains |
+|---|---|---|
+| **OL config** (`namespace`, `name`, `inputs`, `outputs`, ...) | User in `.tf` | The OpenLineage event definition |
+| **Dataplex state** (`process_name`, `run_name`, ...) | Provider after API call | GCP resource identifiers |
+
+---
+
+## Requirements
+
+- Terraform ≥ 1.0
+- Go ≥ 1.21 (to build from source)
+- A GCP project with the [Dataplex API enabled](https://console.cloud.google.com/apis/library/datalineage.googleapis.com)
+- One of:
+  - Application Default Credentials (`gcloud auth application-default login`)
+  - A service account key file with `roles/datalineage.admin`
+
+---
 
 ## Installation
+
+### From source (development)
+
+```bash
+git clone https://github.com/tnazarew/openlineage-terraform-dataplex-provider
+cd openlineage-terraform-dataplex-provider
+make build   # builds binary to ./bin/
+make apply   # builds + runs terraform apply in ./examples/
+```
+
+The `Makefile` sets up a local `.terraformrc` dev override so Terraform uses the
+locally built binary instead of fetching from a registry.
+
+---
+
+## Provider Configuration
 
 ```hcl
 terraform {
   required_providers {
     openlineage = {
-      source  = "local/openlineage"
-      version = "0.1.0"
+      source = "registry.terraform.io/tomasznazarewicz/openlineage"
+    }
+  }
+}
+
+provider "openlineage" {
+  project_id   = "my-gcp-project"   # required
+  region       = "us-central1"      # required
+  # credentials_file = "/path/to/sa.json"  # optional, uses ADC if omitted
+
+  warn_on_unused_facets = true  # optional, default true
+                                # set false when migrating from another consumer
+}
+```
+
+### Provider Arguments
+
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `project_id` | string | ✅ | GCP project ID |
+| `region` | string | ✅ | GCP region where Dataplex Lineage API is enabled |
+| `credentials_file` | string | | Path to a service account JSON key. Omit to use ADC. |
+| `warn_on_unused_facets` | bool | | Emit warnings when config defines facets Dataplex ignores. Default: `true`. Set `false` during catalog migrations. |
+
+### Environment Variable Fallbacks
+
+| Variable | Overridden by |
+|---|---|
+| `GCP_PROJECT_ID` | `project_id` in provider block |
+| `GCP_REGION` | `region` in provider block |
+| `GOOGLE_APPLICATION_CREDENTIALS` | `credentials_file` in provider block |
+
+---
+
+## Resource: `openlineage_job`
+
+Manages a lineage job in GCP Dataplex. Each resource instance corresponds to one
+Dataplex **Process** entity. Applying emits an OpenLineage `RunEvent` (`COMPLETE`)
+which Dataplex processes into Process + Run + LineageEvent entities.
+
+### Example — minimal
+
+```hcl
+resource "openlineage_job" "example" {
+  namespace = "airflow"
+  name      = "analytics.aggregate_sales"
+
+  inputs {
+    namespace = "bigquery"
+    name      = "my-project.raw.orders"
+  }
+
+  outputs {
+    namespace = "bigquery"
+    name      = "my-project.analytics.sales_summary"
+  }
+}
+```
+
+### Example — with facets and column lineage
+
+```hcl
+resource "openlineage_job" "aggregate_sales" {
+  namespace   = "airflow"
+  name        = "analytics.aggregate_product_sales"
+  description = "Joins products and orders to produce sales statistics"
+
+  inputs {
+    namespace = "bigquery"
+    name      = "my-project.raw.products"
+
+    symlinks {
+      namespace = "hive"
+      name      = "default.products"
+      type      = "TABLE"
+    }
+  }
+
+  inputs {
+    namespace = "bigquery"
+    name      = "my-project.raw.order_items"
+  }
+
+  outputs {
+    namespace = "bigquery"
+    name      = "my-project.analytics.product_sales"
+
+    column_lineage {
+      fields {
+        name = "total_revenue"
+
+        input_field {
+          namespace = "bigquery"
+          name      = "my-project.raw.order_items"
+          field     = "unit_price"
+
+          transformation {
+            type        = "DIRECT"
+            subtype     = "AGGREGATION"
+            description = "Sum of unit prices"
+          }
+        }
+      }
+
+      dataset {
+        namespace = "bigquery"
+        name      = "my-project.raw.products"
+        field     = "product_id"
+
+        transformation {
+          type    = "INDIRECT"
+          subtype = "FILTER"
+        }
+      }
     }
   }
 }
 ```
 
-## Provider Configuration
+### Schema Reference
 
-```hcl
-provider "openlineage" {
-  project_id       = "my-gcp-project"
-  region           = "us-central1"
-  credentials_file = "/path/to/credentials.json"  # Optional, uses ADC if not set
-}
-```
+#### Top-level arguments
 
-### Configuration Options
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | string | ✅ | OpenLineage job namespace. Changing this forces replacement. |
+| `name` | string | ✅ | OpenLineage job name. Changing this forces replacement. |
+| `description` | string | | Free-text description attached to the OL job. |
 
-- `project_id` (Required): GCP Project ID for Dataplex lineage
-- `region` (Required): GCP Region for Dataplex API
-- `credentials_file` (Optional): Path to GCP credentials. Uses Application Default Credentials if not set.
+#### `inputs` block (repeatable)
 
-Environment variables:
+Declares a dataset this job reads from. Maps to an OL `InputElement`.
 
-- `GCP_PROJECT_ID`: Default project ID
-- `GCP_REGION`: Default region
-- `GOOGLE_APPLICATION_CREDENTIALS`: Default credentials file
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | string | ✅ | Dataset namespace (e.g. `bigquery`) |
+| `name` | string | ✅ | Dataset name (e.g. `project.dataset.table`) |
+| `symlinks` | block | | Alternate identifiers — see below |
+| `catalog` | block | | Catalog/metastore metadata — see below |
 
-## Resource: `openlineage_job`
+#### `outputs` block (repeatable)
 
-Defines a job that emits OpenLineage RunEvents to Dataplex.
+Declares a dataset this job writes to. Maps to an OL `OutputElement`.
+Same arguments as `inputs`, plus `column_lineage`.
 
-### Example Usage
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | string | ✅ | Dataset namespace |
+| `name` | string | ✅ | Dataset name |
+| `symlinks` | block | | Alternate identifiers |
+| `catalog` | block | | Catalog/metastore metadata |
+| `column_lineage` | block | | Field-to-field lineage — see below |
 
-```hcl
-resource "openlineage_job" "transform_sales" {
-  namespace   = "my-scheduler"
-  name        = "etl_pipeline.transform_sales"
-  description = "Transforms raw sales data"
+#### `symlinks` block
 
-  job_type {
-    processing_type = "BATCH"
-    integration     = "SPARK"
-    job_type        = "JOB"
-  }
+Maps to the OL `SymlinksDatasetFacet`. Declares that this dataset is also known
+under a different name in another system.
 
-  owners {
-    name = "team:data-engineering"
-    type = "MAINTAINER"
-  }
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | string | ✅ | Alternate namespace |
+| `name` | string | ✅ | Alternate name |
+| `type` | string | ✅ | e.g. `TABLE`, `VIEW` |
 
-  inputs {
-    namespace = "bigquery://my-project"
-    name      = "raw_data.sales"
-  }
+#### `column_lineage` block (on `outputs` only)
 
-  outputs {
-    namespace = "bigquery://my-project"
-    name      = "analytics.sales_summary"
-  }
-}
-```
+Maps to the OL `ColumnLineageFacet`.
 
-### Schema
+**`fields` sub-block** — maps an output column to specific input columns:
 
-#### User Configuration (Required/Optional)
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | ✅ | Output column name |
+| `input_field` | block | | Contributing input columns |
 
-- `namespace` (Required): Job namespace (e.g., `my-scheduler-namespace`)
-- `name` (Required): Job name (e.g., `etl_pipeline.transform_data`)
-- `description` (Optional): Job description
+**`input_field` sub-block:**
 
-**Blocks:**
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | string | ✅ | Input dataset namespace |
+| `name` | string | ✅ | Input dataset name |
+| `field` | string | ✅ | Input column name |
+| `transformation` | block | | How this field was transformed |
 
-- `job_type` (Optional): Job type metadata
-    - `processing_type` (Required): `BATCH` or `STREAMING`
-    - `integration` (Required): Integration type (e.g., `SPARK`, `AIRFLOW`, `DBT`, `BYOL`)
-    - `job_type` (Required): Job type (e.g., `QUERY`, `COMMAND`, `DAG`, `TASK`, `JOB`, `MODEL`)
+**`dataset` sub-block** — dataset-level contribution (input column unknown):
 
-- `owners` (Optional, repeatable): Job ownership
-    - `name` (Required): Owner identifier (e.g., `team:data-engineering`)
-    - `type` (Required): Owner type (e.g., `MAINTAINER`, `OWNER`)
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | string | ✅ | Input dataset namespace |
+| `name` | string | ✅ | Input dataset name |
+| `field` | string | ✅ | Output field this dataset contributes to |
+| `transformation` | block | | How the data was transformed |
 
-- `inputs` (Optional, repeatable): Input dataset references
-    - `namespace` (Required): Dataset namespace
-    - `name` (Required): Dataset name
+**`transformation` sub-block:**
 
-- `outputs` (Optional, repeatable): Output dataset references
-    - `namespace` (Required): Dataset namespace
-    - `name` (Required): Dataset name
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `type` | string | ✅ | `DIRECT` or `INDIRECT` |
+| `subtype` | string | | e.g. `IDENTITY`, `AGGREGATION`, `FILTER` |
+| `description` | string | | Human-readable explanation |
+| `masking` | bool | | `true` if this transform masks/anonymises data |
 
-#### Computed Dataplex State (Read-only)
+#### Computed attributes (read-only)
 
-- `id`: Internal identifier (`namespace.name`)
-- `process_name`: Dataplex process resource name
-- `run_id`: Latest run UUID
-- `run_state`: Latest run state (e.g., `COMPLETED`, `FAILED`)
-- `creation_time`: Process creation timestamp (ISO 8601)
-- `update_time`: Process last update timestamp (ISO 8601)
+Set by the provider after each apply. Never written by the user.
 
-### Behavior
+| Attribute | Description |
+|---|---|
+| `id` | Internal identifier: `namespace.name` |
+| `run_id` | UUID generated for the most recent emission |
+| `process_name` | Full GCP resource name of the Dataplex Process |
+| `run_name` | Full GCP resource name of the most recent Dataplex Run |
+| `lineage_event_name` | Full GCP resource name of the most recent LineageEvent |
+| `run_state` | State of the most recent Run: `COMPLETED`, `FAILED`, `RUNNING` |
+| `update_time` | Timestamp of the most recent Run end time (ISO 8601) |
 
-**On Create/Update:**
+---
 
-1. Generates a new run UUID
-2. Emits an OpenLineage RunEvent (COMPLETE) to Dataplex
-3. Reads back Dataplex Process state
-4. Updates computed attributes
+## Drift Detection
 
-**On Read:**
+During `terraform plan`, the provider calls `GetProcess` with the stored `process_name`
+to verify the Dataplex Process still exists:
 
-- Refreshes computed state from Dataplex API
+- **Process still exists** → refresh `run_state` and `update_time`, no change planned
+- **Process deleted outside Terraform (404)** → resource removed from state, plan shows `+` (re-create)
+- **Process exists but origin doesn't match this provider** → warning logged, resource managed normally
 
-**On Delete:**
+The provider also verifies that `origin.source_type == CUSTOM` and
+`origin.name == "openlineage-byol-provider-VERSION"` on the Process, so it can
+distinguish processes it created from ones created by other tools.
 
-- Deletes the Dataplex Process resource
+---
 
-## Development Status
+## Import
 
-This is a **skeleton implementation**. The following are not yet implemented:
-
-- [ ] Actual OpenLineage event building (waiting for Go client library)
-- [ ] Actual Dataplex API calls (GET/DELETE operations)
-- [ ] Error handling for API responses
-- [ ] Retry logic for eventual consistency
-
-The provider currently logs operations but does not make real API calls. This allows:
-
-- Schema validation and testing
-- Terraform plan/apply dry runs
-- Parallel development of Go OpenLineage client
-
-See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for detailed status.
-
-## Examples
-
-See the [examples/](./examples/) directory for complete examples:
-
-- `simple_job.tf`: Basic job definition with inputs/outputs
-
-## Building
+An existing Dataplex Process can be imported into Terraform state:
 
 ```bash
-go build -o terraform-provider-openlineage
+terraform import openlineage_job.example airflow:my.pipeline
 ```
 
-## Testing
+The import ID format is `namespace:job_name`. The provider will scan all Processes
+in the configured project/region and find the one whose display name matches.
+
+---
+
+## Development
+
+### Build
 
 ```bash
-go test ./...
+make build   # compiles to ./bin/terraform-provider-openlineage
+make docs    # generates ./docs/ from schema + templates
+make plan    # build + terraform plan in ./examples/
+make apply   # build + terraform apply in ./examples/
 ```
 
-## Architecture Documentation
+### Project Structure
 
-- [ARCHITECTURE_EXPLAINED.md](ARCHITECTURE_EXPLAINED.md): Detailed architecture decisions
-- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md): Current implementation status
+```
+internal/provider/
+  provider.go          Provider config schema, authentication, resource registration
+  resource_job.go      openlineage_job CRUD + schema
+  event_builder.go     Builds OL RunEvent from Terraform model
+  dataplex_client.go   GCP Dataplex API calls (emit, read, delete, run state)
+  ol_models.go         OL config structs (job facets, dataset facets)
+  dataplex_models.go   Dataplex computed state struct
+  models.go            Top-level JobResourceModel (composes OL + Dataplex)
 
-## Contributing
+examples/
+  main.tf              Working example config
+```
 
-This provider is under active development. The simplified architecture allows for:
+---
 
-1. Independent Go OpenLineage client development
-2. Gradual Dataplex API integration
-3. Easy extension with additional facets
+## Related
 
-## License
-
-[Your License Here]
+- [OpenLineage](https://openlineage.io) — the lineage specification
+- [OpenLineage Go client](https://github.com/OpenLineage/OpenLineage/tree/main/client/go) — used for event construction
+- [GCP Dataplex Lineage API](https://cloud.google.com/dataplex/docs/lineage-overview)
+- [BYOL_PROPOSAL.md](../BYOL_PROPOSAL.md) — proposal for a generic shared module in the OL repository
+- [GENERIC_DESIGN.md](./GENERIC_DESIGN.md) — design doc for a multi-consumer architecture
