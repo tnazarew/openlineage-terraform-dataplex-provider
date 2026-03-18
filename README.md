@@ -7,6 +7,9 @@ creating and managing lineage entities (Process, Run, LineageEvent) as Terraform
 This is an implementation of the **Bring Your Own OpenLineage (BYOOL)** concept — declaring
 static lineage for pipelines that don't have runtime OpenLineage instrumentation.
 
+The generic resource building blocks live in the OpenLineage monorepo at
+[`byool/terraform`](https://github.com/OpenLineage/openlineage/tree/main/byool/terraform).
+
 ---
 
 ## How It Works
@@ -62,21 +65,11 @@ terraform destroy
   └─ DeleteProcess  →  Dataplex removes Process (and all its Runs)
 ```
 
-### State Structure
-
-The provider maintains two clearly separated pieces of state per resource:
-
-| Section | Written by | Contains |
-|---|---|---|
-| **OL config** (`namespace`, `name`, `inputs`, `outputs`, ...) | User in `.tf` | The OpenLineage event definition |
-| **Dataplex state** (`process_name`, `run_name`, ...) | Provider after API call | GCP resource identifiers |
-
 ---
 
 ## Requirements
 
 - Terraform ≥ 1.0
-- Go ≥ 1.21 (to build from source)
 - A GCP project with the [Dataplex API enabled](https://console.cloud.google.com/apis/library/datalineage.googleapis.com)
 - One of:
   - Application Default Credentials (`gcloud auth application-default login`)
@@ -86,31 +79,34 @@ The provider maintains two clearly separated pieces of state per resource:
 
 ## Installation
 
+### From Terraform Registry
+
+```hcl
+terraform {
+  required_providers {
+    openlineage = {
+      source  = "tnazarew/openlineage-dataplex"
+      version = "~> 0.0.1"
+    }
+  }
+}
+```
+
 ### From source (development)
 
 ```bash
-git clone https://github.com/tnazarew/openlineage-terraform-dataplex-provider
-cd openlineage-terraform-dataplex-provider
+git clone https://github.com/tnazarew/terraform-provider-openlineage-dataplex
+cd terraform-provider-openlineage-dataplex
 make build   # builds binary to ./bin/
-make apply   # builds + runs terraform apply in ./examples/
+make plan    # build + terraform plan in ./examples/
+make apply   # build + terraform apply in ./examples/
 ```
-
-The `Makefile` sets up a local `.terraformrc` dev override so Terraform uses the
-locally built binary instead of fetching from a registry.
 
 ---
 
 ## Provider Configuration
 
 ```hcl
-terraform {
-  required_providers {
-    openlineage = {
-      source = "registry.terraform.io/tomasznazarewicz/openlineage"
-    }
-  }
-}
-
 provider "openlineage" {
   project_id   = "my-gcp-project"   # required
   region       = "us-central1"      # required
@@ -128,7 +124,7 @@ provider "openlineage" {
 | `project_id` | string | ✅ | GCP project ID |
 | `region` | string | ✅ | GCP region where Dataplex Lineage API is enabled |
 | `credentials_file` | string | | Path to a service account JSON key. Omit to use ADC. |
-| `warn_on_unused_facets` | bool | | Emit warnings when config defines facets Dataplex ignores. Default: `true`. Set `false` during catalog migrations. |
+| `warn_on_unused_facets` | bool | | Emit warnings when config defines facets Dataplex ignores. Default: `true`. Set `false` during migrations. |
 
 ### Environment Variable Fallbacks
 
@@ -237,8 +233,6 @@ resource "openlineage_job" "aggregate_sales" {
 
 #### `inputs` block (repeatable)
 
-Declares a dataset this job reads from. Maps to an OL `InputElement`.
-
 | Argument | Type | Required | Description |
 |---|---|---|---|
 | `namespace` | string | ✅ | Dataset namespace (e.g. `bigquery`) |
@@ -248,7 +242,6 @@ Declares a dataset this job reads from. Maps to an OL `InputElement`.
 
 #### `outputs` block (repeatable)
 
-Declares a dataset this job writes to. Maps to an OL `OutputElement`.
 Same arguments as `inputs`, plus `column_lineage`.
 
 | Argument | Type | Required | Description |
@@ -261,9 +254,6 @@ Same arguments as `inputs`, plus `column_lineage`.
 
 #### `symlinks` block
 
-Maps to the OL `SymlinksDatasetFacet`. Declares that this dataset is also known
-under a different name in another system.
-
 | Argument | Type | Required | Description |
 |---|---|---|---|
 | `namespace` | string | ✅ | Alternate namespace |
@@ -272,9 +262,7 @@ under a different name in another system.
 
 #### `column_lineage` block (on `outputs` only)
 
-Maps to the OL `ColumnLineageFacet`.
-
-**`fields` sub-block** — maps an output column to specific input columns:
+**`fields` sub-block:**
 
 | Argument | Type | Required | Description |
 |---|---|---|---|
@@ -290,7 +278,7 @@ Maps to the OL `ColumnLineageFacet`.
 | `field` | string | ✅ | Input column name |
 | `transformation` | block | | How this field was transformed |
 
-**`dataset` sub-block** — dataset-level contribution (input column unknown):
+**`dataset` sub-block:**
 
 | Argument | Type | Required | Description |
 |---|---|---|---|
@@ -310,8 +298,6 @@ Maps to the OL `ColumnLineageFacet`.
 
 #### Computed attributes (read-only)
 
-Set by the provider after each apply. Never written by the user.
-
 | Attribute | Description |
 |---|---|
 | `id` | Internal identifier: `namespace.name` |
@@ -326,16 +312,10 @@ Set by the provider after each apply. Never written by the user.
 
 ## Drift Detection
 
-During `terraform plan`, the provider calls `GetProcess` with the stored `process_name`
-to verify the Dataplex Process still exists:
+During `terraform plan`, the provider calls `GetProcess` with the stored `process_name`:
 
 - **Process still exists** → refresh `run_state` and `update_time`, no change planned
 - **Process deleted outside Terraform (404)** → resource removed from state, plan shows `+` (re-create)
-- **Process exists but origin doesn't match this provider** → warning logged, resource managed normally
-
-The provider also verifies that `origin.source_type == CUSTOM` and
-`origin.name == "openlineage-byol-provider-VERSION"` on the Process, so it can
-distinguish processes it created from ones created by other tools.
 
 ---
 
@@ -347,36 +327,36 @@ An existing Dataplex Process can be imported into Terraform state:
 terraform import openlineage_job.example airflow:my.pipeline
 ```
 
-The import ID format is `namespace:job_name`. The provider will scan all Processes
-in the configured project/region and find the one whose display name matches.
+The import ID format is `namespace:job_name`.
 
 ---
 
 ## Development
 
-### Build
+### Build & test locally
 
 ```bash
-make build   # compiles to ./bin/terraform-provider-openlineage
-make docs    # generates ./docs/ from schema + templates
+make build   # compiles to ./bin/
 make plan    # build + terraform plan in ./examples/
 make apply   # build + terraform apply in ./examples/
+make destroy # build + terraform destroy in ./examples/
+make docs    # regenerates ./docs/ from schema + templates
 ```
 
 ### Project Structure
 
 ```
-internal/provider/
-  provider.go          Provider config schema, authentication, resource registration
-  resource_job.go      openlineage_job CRUD + schema
-  event_builder.go     Builds OL RunEvent from Terraform model
-  dataplex_client.go   GCP Dataplex API calls (emit, read, delete, run state)
-  ol_models.go         OL config structs (job facets, dataset facets)
-  dataplex_models.go   Dataplex computed state struct
-  models.go            Top-level JobResourceModel (composes OL + Dataplex)
-
+main.go                      Provider entry point
+internal/dataplex/
+  provider.go                Provider config schema and authentication
+  dataplex_job_resource.go   openlineage_job CRUD + schema
+  dataplex_client.go         GCP Dataplex API calls
+  dataplex_models.go         Dataplex computed state structs
 examples/
-  main.tf              Working example config
+  provider/provider.tf       Minimal provider config example
+  resources/openlineage_job/ Resource example (used by tfplugindocs)
+docs/                        Generated — do not edit manually
+templates/                   tfplugindocs templates
 ```
 
 ---
@@ -384,7 +364,6 @@ examples/
 ## Related
 
 - [OpenLineage](https://openlineage.io) — the lineage specification
-- [OpenLineage Go client](https://github.com/OpenLineage/OpenLineage/tree/main/client/go) — used for event construction
+- [OpenLineage Go client](https://github.com/OpenLineage/openlineage/tree/main/client/go) — used for event construction
+- [BYOOL Terraform resources](https://github.com/OpenLineage/openlineage/tree/main/byool/terraform) — generic resource building blocks used by this provider
 - [GCP Dataplex Lineage API](https://cloud.google.com/dataplex/docs/lineage-overview)
-- [BYOL_PROPOSAL.md](../BYOL_PROPOSAL.md) — proposal for a generic shared module in the OL repository
-- [GENERIC_DESIGN.md](./GENERIC_DESIGN.md) — design doc for a multi-consumer architecture

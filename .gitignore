@@ -8,6 +8,12 @@ examples/.terraform.lock.hcl
 examples/terraform.tfstate
 examples/terraform.tfstate.backup
 
+# Local dev config — contains absolute paths, machine-specific
+.terraformrc
+
+# Scratchpad / outdated docs not relevant to this repo
+ignored/
+
 # macOS
 .DS_Store
 
