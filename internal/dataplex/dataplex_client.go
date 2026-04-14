@@ -28,9 +28,23 @@ import (
 	// structpb lets us convert a Go map[string]any into a protobuf Struct,
 	// which is what ProcessOpenLineageRunEvent expects as its payload.
 	"google.golang.org/protobuf/types/known/structpb"
-
-	"github.com/OpenLineage/openlineage/byool/terraform/ol"
 )
+
+// providerProducer is the URI embedded in every OL event as the "producer" field.
+// It matches the producer constant in byool/terraform event_builder.go and is
+// used to verify that a Dataplex Process was created by this provider.
+const providerProducer = "https://github.com/OpenLineage/openlineage/byool/terraform"
+
+// lineageAPI is the interface that wraps all GCP Lineage API operations used by
+// DataplexJobResource. Defining it here allows tests to substitute a fake
+// implementation without making real gRPC calls.
+type lineageAPI interface {
+	emitAndCapture(ctx context.Context, event any) (*emitResult, error)
+	getProcess(ctx context.Context, processName string) (*processInfo, error)
+	getLatestRun(ctx context.Context, processName string) (*runInfo, error)
+	deleteProcess(ctx context.Context, processName string) error
+	searchProcess(ctx context.Context, namespace, jobName string) (*processInfo, error)
+}
 
 // dataplexClient wraps the GCP Lineage API client.
 // It holds the underlying gRPC client and the parent resource path
@@ -39,6 +53,9 @@ type dataplexClient struct {
 	client *lineage.Client
 	parent string // e.g. "projects/my-project/locations/us-central1"
 }
+
+// compile-time check: dataplexClient must implement lineageAPI.
+var _ lineageAPI = &dataplexClient{}
 
 // newDataplexClient creates and connects a dataplexClient.
 // It uses Application Default Credentials by default; if credentialsFile
@@ -176,7 +193,7 @@ func (d *dataplexClient) getProcess(ctx context.Context, processName string) (*p
 	if origin := process.GetOrigin(); origin != nil {
 		info.OriginName = origin.GetName()
 		info.OriginVerified = origin.GetSourceType() == lineagepb.Origin_CUSTOM &&
-			origin.GetName() == ol.ProviderOriginName
+			origin.GetName() == providerProducer
 	}
 
 	return info, nil
@@ -211,7 +228,7 @@ func (d *dataplexClient) searchProcess(ctx context.Context, namespace, jobName s
 			if origin := process.GetOrigin(); origin != nil {
 				info.OriginName = origin.GetName()
 				info.OriginVerified = origin.GetSourceType() == lineagepb.Origin_CUSTOM &&
-					origin.GetName() == ol.ProviderOriginName
+					origin.GetName() == providerProducer
 			}
 			return info, nil
 		}
@@ -224,7 +241,7 @@ func (d *dataplexClient) searchProcess(ctx context.Context, namespace, jobName s
 // OpenLineage event with the specified namespace and job name.
 //
 // Matching priority:
-//  1. Origin check — if the process has SourceType=CUSTOM and our ol.ProviderOriginName,
+//  1. Origin check — if the process has SourceType=CUSTOM and our providerProducer,
 //     it was definitely created by this dataplex; then match display_name against
 //     the expected "namespace:jobName" format that Dataplex sets from the OL event.
 //  2. Attribute check — explicit OL origin attributes (may not always be present).
@@ -237,7 +254,7 @@ func matchesOrigin(process *lineagepb.Process, namespace, jobName string) bool {
 	// from the GcpLineage facet we send in the OL event.
 	if origin := process.GetOrigin(); origin != nil {
 		if origin.GetSourceType() == lineagepb.Origin_CUSTOM &&
-			origin.GetName() == ol.ProviderOriginName {
+			origin.GetName() == providerProducer {
 			// Provider origin confirmed — now match by display_name which Dataplex
 			// sets to "namespace:jobName" from the OL event job identity.
 			return displayName == expectedDisplayName || displayName == jobName

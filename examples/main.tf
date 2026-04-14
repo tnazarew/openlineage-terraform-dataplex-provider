@@ -14,9 +14,9 @@ terraform {
 # If credentials_file is omitted, Application Default Credentials are used.
 # To activate ADC: gcloud auth application-default login
 provider "openlineage" {
-  project_id       = "gcp-open-lineage-testing"
+  project_id       = "example-project"
   region           = "us"
-  credentials_file = "/Users/tomasznazarewicz/gcp-open-lineage-testing-125ff83662a1.json" # Optional, uses ADC if not set
+  credentials_file = "path/to/credentials/file.json" # Optional, uses ADC if not set
 }
 
 resource "openlineage_job" "example" {

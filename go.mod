@@ -4,10 +4,11 @@ go 1.26.0
 
 require (
 	cloud.google.com/go/datacatalog v1.26.1
-	github.com/OpenLineage/openlineage/byool/terraform v0.0.1-prerelease
+	github.com/OpenLineage/openlineage/byool/terraform/openlineage-base-resource v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/terraform-plugin-framework v1.18.0
 	github.com/hashicorp/terraform-plugin-log v0.10.0
+	github.com/hashicorp/terraform-plugin-testing v1.13.1
 	google.golang.org/api v0.269.0
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11

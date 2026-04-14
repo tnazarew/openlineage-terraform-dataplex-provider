@@ -10,8 +10,8 @@ cloud.google.com/go/datacatalog v1.26.1 h1:bCRKA8uSQN8wGW3Tw0gwko4E9a64GRmbW1nCb
 cloud.google.com/go/datacatalog v1.26.1/go.mod h1:2Qcq8vsHNxMDgjgadRFmFG47Y+uuIVsyEGUrlrKEdrg=
 cloud.google.com/go/longrunning v0.6.7 h1:IGtfDWHhQCgCjwQjV9iiLnUta9LBCo8R9QmAFsS/PrE=
 cloud.google.com/go/longrunning v0.6.7/go.mod h1:EAFV3IZAKmM56TyiE6VAP3VoTzhZzySwI/YI1s/nRsY=
-github.com/OpenLineage/openlineage/byool/terraform v0.0.1-prerelease h1:15x5fToLxb5XO92CfhekIUTgnJZe5cE7Bt1QYC95vM4=
-github.com/OpenLineage/openlineage/byool/terraform v0.0.1-prerelease/go.mod h1:wkfcvV+RluDPD8anYfSZkHwEyN2BWcGBu0iNbb7qMGk=
+github.com/OpenLineage/openlineage/byool/terraform v0.0.2-prerelease h1:1hJJ/GQARYCtqwff+mpchoOpDWDK7hK2hf+31akM+Vo=
+github.com/OpenLineage/openlineage/byool/terraform v0.0.2-prerelease/go.mod h1:wkfcvV+RluDPD8anYfSZkHwEyN2BWcGBu0iNbb7qMGk=
 github.com/OpenLineage/openlineage/client/go v1.46.0-prerelease h1:AMzFErXiSZ02DbUjWexsbJ+hCLLop4ESzE9IKGwNhsI=
 github.com/OpenLineage/openlineage/client/go v1.46.0-prerelease/go.mod h1:1FVvYltNW+hnXHxBLX2aPn1DrVyYwVk/4X3dA/UWQjI=
 github.com/bufbuild/protocompile v0.14.1 h1:iA73zAf/fyljNjQKwYzUHD6AD4R8KMasmwa/FBatYVw=

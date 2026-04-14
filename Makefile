@@ -1,5 +1,4 @@
-BINARY_NAME=openlineage-dataplex-provider
-TF_PLUGIN_NAME=terraform-provider-openlineage-dataplex
+BINARY_NAME=terraform-provider-openlineage-dataplex
 INSTALL_DIR=bin
 OS_ARCH=$(shell go env GOOS)_$(shell go env GOARCH)
 TF_ENV=TF_CLI_CONFIG_FILE=$(PWD)/.terraformrc
@@ -11,8 +10,6 @@ GOPATH_BIN=$(shell go env GOPATH)/bin
 build:
 	mkdir -p $(INSTALL_DIR)
 	go build -o $(INSTALL_DIR)/$(BINARY_NAME) .
-	ln -sf $(BINARY_NAME) $(INSTALL_DIR)/$(TF_PLUGIN_NAME)
-	@echo "✅ Built: $(INSTALL_DIR)/$(BINARY_NAME) → $(INSTALL_DIR)/$(TF_PLUGIN_NAME)"
 
 # Run terraform apply using dev_overrides
 show:prov
@@ -46,6 +43,14 @@ install: build
 # Run tests
 test:
 	go test ./... -v
+
+# Run acceptance tests (requires live GCP credentials)
+# Usage: make testacc GCP_PROJECT_ID=my-project GCP_REGION=us-central1
+testacc:
+	TF_ACC=1 \
+	GCP_PROJECT_ID=$(GCP_PROJECT_ID) \
+	GCP_REGION=$(GCP_REGION) \
+	go test ./internal/dataplex/... -run TestAcc -v -timeout 30m
 
 # Generate provider documentation from templates + schema
 docs:

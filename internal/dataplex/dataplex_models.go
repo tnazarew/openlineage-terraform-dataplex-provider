@@ -2,14 +2,14 @@ package dataplex
 
 import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/OpenLineage/openlineage/byool/terraform/ol"
+	"github.com/OpenLineage/openlineage/byool/terraform/openlineage-base-resource/ol"
 )
 
 // DataplexJobModel is the top-level state struct for the openlineage_job resource.
 // ol.JobResourceModel and DataplexState are embedded (no tfsdk tag) so the
 // framework promotes all their fields into this struct's attribute namespace.
 type DataplexJobModel struct {
-	ol.JobResourceModel // embedded — promotes id, run_id, namespace, name, inputs, outputs, …
+	ol.JobResourceModel // embedded — promotes namespace, name, inputs, outputs, …
 	DataplexState       // embedded — promotes process_name, run_name, lineage_event_name, update_time
 }
 

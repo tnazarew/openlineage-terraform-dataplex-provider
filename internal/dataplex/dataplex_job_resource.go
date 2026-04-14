@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -13,7 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/OpenLineage/openlineage/byool/terraform/ol"
+	"github.com/OpenLineage/openlineage/byool/terraform/openlineage-base-resource/ol"
 )
 
 // Compile-time checks.
@@ -45,8 +44,8 @@ func NewDataplexJobResource() resource.Resource {
 // The generic CRUD methods (Create, Read, Update, Delete, Schema, Metadata)
 // are all inherited from BaseJobResource — this struct does not override them.
 type DataplexJobResource struct {
-	ol.BaseJobResource                 // inherits Metadata, Schema, Create, Read, Update, Delete
-	dpClient           *dataplexClient // Dataplex gRPC client — created in Configure()
+	ol.BaseJobResource              // inherits Metadata, Schema, Create, Read, Update, Delete
+	dpClient           lineageAPI  // Dataplex gRPC client — created in Configure(); interface allows test fakes
 	projectID          string
 	region             string
 }
@@ -54,28 +53,21 @@ type DataplexJobResource struct {
 // ── ol.JobResourceBackend implementation ─────────────────────────────────────
 
 // Capability declares which OL facets the Dataplex consumer supports.
-// Dataplex accepts RunEvents but only uses a subset of facets to build
-// the Process entity — the rest are silently ignored by the API.
+// Dataplex accepts RunEvents but only maps a subset of facets to its
+// Process / Run data model — unlisted facets are silently ignored by the API.
 func (r *DataplexJobResource) Capability() ol.JobCapability {
-	return ol.FullJobCapability().WithFacetDisabled(
-		// Job facets Dataplex does not use
-		ol.FacetJobDocumentation,
-		ol.FacetJobSourceCode,
-		ol.FacetJobSourceCodeLocation,
-		ol.FacetJobSQL,
-		ol.FacetJobTags,
-		// Dataset facets Dataplex does not use
-		ol.FacetDatasetSchema,
-		ol.FacetDatasetDataSource,
-		ol.FacetDatasetDocumentation,
-		ol.FacetDatasetType,
-		ol.FacetDatasetVersion,
-		ol.FacetDatasetStorage,
-		ol.FacetDatasetOwnership,
-		ol.FacetDatasetLifecycleStateChange,
-		ol.FacetDatasetHierarchy,
-		ol.FacetDatasetTags,
-	)
+	return ol.EmptyJobCapability().
+		WithFacetEnabled(
+			// Job facets used by Dataplex
+			ol.FacetJobType,
+			ol.FacetJobOwnership,
+		).
+		WithDatasetFacetEnabled(
+			// Dataset facets used by Dataplex
+			ol.FacetDatasetSymlinks,
+			ol.FacetDatasetCatalog,
+			ol.FacetDatasetColumnLineage,
+		)
 }
 
 // ConsumerConfigure creates the Dataplex gRPC client from dataplex config.
@@ -113,7 +105,6 @@ func (r *DataplexJobResource) ConsumerAttributes() map[string]schema.Attribute {
 				stringplanmodifier.UseStateForUnknown(),
 			},
 		},
-		"run_id":             schema.StringAttribute{Computed: true, Description: "UUID of the latest emitted run"},
 		"run_name":           schema.StringAttribute{Computed: true, Description: "Dataplex run resource name"},
 		"lineage_event_name": schema.StringAttribute{Computed: true, Description: "Dataplex lineage event resource name"},
 		"update_time":        schema.StringAttribute{Computed: true, Description: "Process last update time (ISO 8601)"},
@@ -128,22 +119,16 @@ func (r *DataplexJobResource) NewModel() any {
 	return &DataplexJobModel{}
 }
 
-func (r *DataplexJobResource) ConsumerEmit(ctx context.Context, modelAny any, runID uuid.UUID) diag.Diagnostics {
+func (r *DataplexJobResource) ConsumerEmit(ctx context.Context, modelAny any) diag.Diagnostics {
 	var diags diag.Diagnostics
 	model := modelAny.(*DataplexJobModel)
-
-	model.ID = types.StringValue(
-		fmt.Sprintf("%s.%s", model.Namespace.ValueString(), model.Name.ValueString()),
-	)
-	model.RunID = types.StringValue(runID.String())
 
 	tflog.Info(ctx, "Emitting OL event to Dataplex", map[string]any{
 		"namespace": model.Namespace.ValueString(),
 		"name":      model.Name.ValueString(),
-		"run_id":    runID.String(),
 	})
 
-	event := ol.BuildRunEvent(&model.JobResourceModel, runID)
+	event := ol.BuildRunEvent(&model.JobResourceModel, r.Capability())
 	result, err := r.dpClient.emitAndCapture(ctx, event.AsEmittable())
 	if err != nil {
 		diags.AddError("Emission Error", fmt.Sprintf("Unable to emit event: %s", err))
@@ -154,6 +139,8 @@ func (r *DataplexJobResource) ConsumerEmit(ctx context.Context, modelAny any, ru
 	model.RunName = types.StringValue(result.RunName)
 	if len(result.LineageEventNames) > 0 {
 		model.LineageEventName = types.StringValue(result.LineageEventNames[0])
+	} else {
+		model.LineageEventName = types.StringValue("")
 	}
 
 	tflog.Info(ctx, "Event emitted", map[string]any{
@@ -189,7 +176,7 @@ func (r *DataplexJobResource) ConsumerRead(ctx context.Context, modelAny any) (b
 		tflog.Warn(ctx, "Dataplex process origin does not match dataplex", map[string]any{
 			"process_name": processName,
 			"origin_name":  process.OriginName,
-			"expected":     ol.ProviderOriginName,
+			"expected":     providerProducer,
 		})
 	}
 
